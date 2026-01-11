@@ -75,6 +75,17 @@ fn should_instrument() -> Result<bool> {
         return Ok(false);
     }
 
+    // Get information about which crate is being compiled
+    let crate_name = env::var_os("CARGO_CRATE_NAME");
+    let pkg_name = env::var_os("CARGO_PKG_NAME");
+    
+    // If we can't determine the crate name, it might be a rustc invocation
+    // that's not part of a cargo build (e.g., rustc --version check)
+    // In this case, don't instrument
+    if crate_name.is_none() && pkg_name.is_none() {
+        return Ok(false);
+    }
+
     // Check if this is a coverage_target_only build and we're not on the target
     if let Some(coverage_target) = env::var_os("CARGO_LLVM_COV_TARGET_ONLY") {
         if let Some(target) = env::var_os("TARGET") {

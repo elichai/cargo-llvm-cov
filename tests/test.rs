@@ -6,7 +6,6 @@ mod auxiliary;
 
 use std::path::Path;
 
-use cargo_config2::Flags;
 use fs_err as fs;
 use test_helper::cli::CommandExt as _;
 
@@ -310,19 +309,16 @@ fn show_env() {
     cargo_llvm_cov("show-env").assert_success().stdout_not_contains("export");
     cargo_llvm_cov("show-env").arg("--export-prefix").assert_success().stdout_contains("export");
 
-    let mut flags = Flags::default();
-    flags.push("--deny warnings");
-    flags.push("--cfg=tests");
-    let flags = flags.encode().unwrap();
-
+    // With the new RUSTC_WRAPPER approach, we set RUSTC_WRAPPER and CARGO_LLVM_COV_FLAGS
+    // instead of CARGO_ENCODED_RUSTFLAGS
     cargo_llvm_cov("show-env")
-        .env("CARGO_ENCODED_RUSTFLAGS", flags)
         .arg("--with-pwsh-env-prefix")
         .assert_success()
-        // Verify the prefix related content + the encoding of "--"
-        .stdout_contains("$env:CARGO_ENCODED_RUSTFLAGS=\"`u{2d}`u{2d}")
-        // Verify binary character didn't lead to incompatible output for pwsh
-        .stdout_contains("`u{1f}");
+        // Verify the wrapper environment variable is set
+        .stdout_contains("$env:RUSTC_WRAPPER=")
+        .stdout_contains("$env:CARGO_LLVM_COV_RUSTC_WRAPPER=")
+        .stdout_contains("$env:CARGO_LLVM_COV_FLAGS=");
+    
     cargo_llvm_cov("show-env")
         .arg("--export-prefix")
         .arg("--with-pwsh-env-prefix")
