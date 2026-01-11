@@ -33,22 +33,16 @@ pub(crate) fn run_wrapper() -> ExitCode {
 }
 
 fn try_run_wrapper() -> Result<ExitCode> {
-    let mut args: Vec<OsString> = env::args_os().collect();
+    let mut args = env::args_os();
 
-    // First arg is our binary name, second is rustc path, rest are rustc args
-    if args.len() < 2 {
-        anyhow::bail!("rustc wrapper called with insufficient arguments");
-    }
+    // First arg is our binary name, skip it
+    args.next();
 
-    // Remove our binary name
-    args.remove(0);
+    // Second arg is the rustc path
+    let rustc = args.next().context("rustc wrapper called without rustc path")?;
 
-    // First remaining arg is the rustc path
-    let rustc = args.remove(0);
-
-    // Add coverage instrumentation flags before other arguments
-    // These are read from environment variables set by cargo-llvm-cov
-    let mut coverage_flags = Vec::new();
+    // Remaining args are rustc arguments
+    let rustc_args: Vec<OsString> = args.collect();
 
     // Check if we should add instrumentation for this invocation
     let should_instrument = should_instrument();
@@ -68,13 +62,15 @@ fn try_run_wrapper() -> Result<ExitCode> {
         }
     }
 
-    if should_instrument {
-        add_coverage_flags(&mut coverage_flags)?;
-    }
-
     // Build the final argument list: coverage flags + original args
-    let mut final_args = coverage_flags;
-    final_args.extend(args);
+    let final_args = if should_instrument {
+        let mut coverage_flags = Vec::new();
+        add_coverage_flags(&mut coverage_flags)?;
+        coverage_flags.extend(rustc_args);
+        coverage_flags
+    } else {
+        rustc_args
+    };
 
     // Execute rustc
     let status = Command::new(&rustc)
@@ -88,57 +84,47 @@ fn try_run_wrapper() -> Result<ExitCode> {
 /// Determine if we should instrument this rustc invocation
 fn should_instrument() -> bool {
     // Check if cargo-llvm-cov environment is active
-    if env::var_os("CARGO_LLVM_COV").is_none() {
+    let Some(_) = env::var_os("CARGO_LLVM_COV") else {
         return false;
-    }
-
-    // Get information about which crate is being compiled
-    let crate_name = env::var_os("CARGO_CRATE_NAME");
-    let pkg_name = env::var_os("CARGO_PKG_NAME");
+    };
 
     // If we can't determine the crate name, it might be a rustc invocation
     // that's not part of a cargo build (e.g., rustc --version check)
     // In this case, don't instrument
-    if crate_name.is_none() && pkg_name.is_none() {
+    if env::var_os("CARGO_CRATE_NAME").is_none() && env::var_os("CARGO_PKG_NAME").is_none() {
         return false;
     }
 
     // Check if this is a coverage_target_only build and we're not on the target
-    if let Some(coverage_target) = env::var_os("CARGO_LLVM_COV_TARGET_ONLY") {
-        if let Some(target) = env::var_os("TARGET") {
-            if target != coverage_target {
-                return false;
-            }
+    if let (Some(coverage_target), Some(target)) =
+        (env::var_os("CARGO_LLVM_COV_TARGET_ONLY"), env::var_os("TARGET"))
+    {
+        if target != coverage_target {
+            return false;
         }
     }
 
     // When using RUSTC_WORKSPACE_WRAPPER, Cargo automatically only calls us
     // for workspace members, not dependencies. When using RUSTC_WRAPPER (with
-    // --dep-coverage), we need to check CARGO_PRIMARY_PACKAGE.
+    // --dep-coverage), we instrument everything.
     //
     // If CARGO_LLVM_COV_DEP_COVERAGE is set, we're using RUSTC_WRAPPER and
-    // should instrument everything.
-    if env::var_os("CARGO_LLVM_COV_DEP_COVERAGE").is_some() {
-        return true;
-    }
-
-    // Otherwise, when using RUSTC_WORKSPACE_WRAPPER, instrument everything
-    // (Cargo already filtered for workspace members)
+    // should instrument everything. Otherwise, when using RUSTC_WORKSPACE_WRAPPER,
+    // instrument everything (Cargo already filtered for workspace members).
     true
 }
 
 /// Add coverage instrumentation flags to the argument list
 fn add_coverage_flags(flags: &mut Vec<OsString>) -> Result<()> {
-    // Read the coverage flags from environment variable set by cargo-llvm-cov
-    if let Some(cov_flags) = env::var_os("CARGO_LLVM_COV_FLAGS") {
-        // Parse space-separated flags
-        let cov_flags_str =
-            cov_flags.to_str().context("CARGO_LLVM_COV_FLAGS contains invalid UTF-8")?;
+    let Some(cov_flags) = env::var_os("CARGO_LLVM_COV_FLAGS") else {
+        return Ok(());
+    };
 
-        for flag in cov_flags_str.split_whitespace() {
-            flags.push(OsString::from(flag));
-        }
-    }
+    // Parse space-separated flags
+    let cov_flags_str =
+        cov_flags.to_str().context("CARGO_LLVM_COV_FLAGS contains invalid UTF-8")?;
+
+    flags.extend(cov_flags_str.split_whitespace().map(OsString::from));
 
     Ok(())
 }

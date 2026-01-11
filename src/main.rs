@@ -297,12 +297,16 @@ fn set_env(cx: &Context, env: &mut dyn EnvTarget, IsNextest(is_nextest): IsNexte
     // Use RUSTC_WORKSPACE_WRAPPER for workspace members only (more optimal)
     // This is only set for workspace members, not dependencies
     // Use RUSTC_WRAPPER only if --dep-coverage is specified to also instrument dependencies
+    let wrapper_path =
+        cx.current_exe.to_str().context("current executable path contains invalid UTF-8")?;
+
     if cx.args.cov.dep_coverage.is_some() {
         // Instrument all crates including dependencies
-        env.set("RUSTC_WRAPPER", cx.current_exe.to_str().unwrap())?;
+        env.set("RUSTC_WRAPPER", wrapper_path)?;
+        env.set("CARGO_LLVM_COV_DEP_COVERAGE", "1")?;
     } else {
         // Only instrument workspace members (default, more optimal)
-        env.set("RUSTC_WORKSPACE_WRAPPER", cx.current_exe.to_str().unwrap())?;
+        env.set("RUSTC_WORKSPACE_WRAPPER", wrapper_path)?;
     }
 
     env.set("CARGO_LLVM_COV_RUSTC_WRAPPER", "1")?;
@@ -315,11 +319,6 @@ fn set_env(cx: &Context, env: &mut dyn EnvTarget, IsNextest(is_nextest): IsNexte
         if let Some(coverage_target) = &cx.args.target {
             env.set("CARGO_LLVM_COV_TARGET_ONLY", coverage_target)?;
         }
-    }
-
-    // Pass dep_coverage setting to the wrapper
-    if cx.args.cov.dep_coverage.is_some() {
-        env.set("CARGO_LLVM_COV_DEP_COVERAGE", "1")?;
     }
 
     // https://doc.rust-lang.org/nightly/rustc/instrument-coverage.html#including-doc-tests
