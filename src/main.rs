@@ -50,8 +50,15 @@ mod env;
 mod fs;
 mod metadata;
 mod regex_vec;
+mod wrapper;
 
 fn main() -> ExitCode {
+    // Check if we're being invoked as a rustc wrapper
+    // The wrapper is detected by checking for CARGO_LLVM_COV_RUSTC_WRAPPER env var
+    if env::var_os("CARGO_LLVM_COV_RUSTC_WRAPPER").is_some() {
+        return wrapper::run_wrapper();
+    }
+
     term::init_coloring();
     if let Err(e) = try_main() {
         error!("{e:#}");
@@ -183,7 +190,9 @@ impl<W: io::Write> EnvTarget for ShowEnvWriter<W> {
 struct IsNextest(bool);
 
 fn set_env(cx: &Context, env: &mut dyn EnvTarget, IsNextest(is_nextest): IsNextest) -> Result<()> {
-    fn push_common_flags(cx: &Context, flags: &mut Flags) {
+    fn build_coverage_flags(cx: &Context) -> Flags {
+        let mut flags = Flags::default();
+        
         if cx.ws.stable_coverage {
             flags.push("-C");
             // TODO: if user already set -C instrument-coverage=..., respect it
@@ -229,6 +238,19 @@ fn set_env(cx: &Context, env: &mut dyn EnvTarget, IsNextest(is_nextest): IsNexte
         if cx.ws.rustc_version.nightly && !cx.args.cov.no_cfg_coverage_nightly {
             flags.push("--cfg=coverage_nightly");
         }
+        
+        if cx.args.remap_path_prefix {
+            flags.push("--remap-path-prefix");
+            flags.push(format!("{}/=", cx.ws.metadata.workspace_root));
+        }
+        if cx.args.target.is_none() {
+            // https://github.com/dtolnay/trybuild/pull/121
+            // https://github.com/dtolnay/trybuild/issues/122
+            // https://github.com/dtolnay/trybuild/pull/123
+            flags.push("--cfg=trybuild_no_target");
+        }
+        
+        flags
     }
 
     let llvm_profile_file_name =
@@ -269,48 +291,36 @@ fn set_env(cx: &Context, env: &mut dyn EnvTarget, IsNextest(is_nextest): IsNexte
         };
     let llvm_profile_file = cx.ws.target_dir.join(llvm_profile_file_name);
 
-    let rustflags = &mut cx.ws.config.rustflags(&cx.ws.target_for_config)?.unwrap_or_default();
-    push_common_flags(cx, rustflags);
-    if cx.args.remap_path_prefix {
-        rustflags.push("--remap-path-prefix");
-        rustflags.push(format!("{}/=", cx.ws.metadata.workspace_root));
-    }
-    if cx.args.target.is_none() {
-        // https://github.com/dtolnay/trybuild/pull/121
-        // https://github.com/dtolnay/trybuild/issues/122
-        // https://github.com/dtolnay/trybuild/pull/123
-        rustflags.push("--cfg=trybuild_no_target");
+    // Build coverage flags that will be used by the rustc wrapper
+    let coverage_flags = build_coverage_flags(cx);
+    
+    // Use RUSTC_WRAPPER instead of setting RUSTFLAGS directly
+    // This provides better interaction with user-configured RUSTFLAGS
+    env.set("RUSTC_WRAPPER", cx.current_exe.to_str().unwrap())?;
+    env.set("CARGO_LLVM_COV_RUSTC_WRAPPER", "1")?;
+    
+    // Set flags for the wrapper to use
+    env.set("CARGO_LLVM_COV_FLAGS", &coverage_flags.encode_space_separated()?)?;
+    
+    // For coverage_target_only mode, pass the target info to the wrapper
+    if cx.args.coverage_target_only {
+        if let Some(coverage_target) = &cx.args.target {
+            env.set("CARGO_LLVM_COV_TARGET_ONLY", coverage_target)?;
+        }
     }
 
     // https://doc.rust-lang.org/nightly/rustc/instrument-coverage.html#including-doc-tests
     let rustdocflags = &mut cx.ws.config.rustdocflags(&cx.ws.target_for_config)?;
     if cx.args.doctests {
         let rustdocflags = rustdocflags.get_or_insert_with(Flags::default);
-        push_common_flags(cx, rustdocflags);
-        rustdocflags.push("-Z");
-        rustdocflags.push("unstable-options");
-        rustdocflags.push("--persist-doctests");
-        rustdocflags.push(cx.ws.doctests_dir.as_str());
-    }
-
-    match (cx.args.coverage_target_only, &cx.args.target) {
-        (true, Some(coverage_target)) => {
-            env.set(
-                &format!("CARGO_TARGET_{}_RUSTFLAGS", target_u_upper(coverage_target)),
-                &rustflags.encode_space_separated()?,
-            )?;
-            env.unset("RUSTFLAGS")?;
-            env.unset("CARGO_ENCODED_RUSTFLAGS")?;
-        }
-        _ => {
-            // First, try with RUSTFLAGS because `nextest` subcommand sometimes doesn't work well with encoded flags.
-            if let Ok(v) = rustflags.encode_space_separated() {
-                env.set("RUSTFLAGS", &v)?;
-                env.unset("CARGO_ENCODED_RUSTFLAGS")?;
-            } else {
-                env.set("CARGO_ENCODED_RUSTFLAGS", &rustflags.encode()?)?;
-            }
-        }
+        // For doctests, we still need to set RUSTDOCFLAGS directly
+        // as there's no RUSTDOC_WRAPPER equivalent
+        let mut doctest_flags = build_coverage_flags(cx);
+        doctest_flags.push("-Z");
+        doctest_flags.push("unstable-options");
+        doctest_flags.push("--persist-doctests");
+        doctest_flags.push(cx.ws.doctests_dir.as_str());
+        *rustdocflags = doctest_flags;
     }
 
     if let Some(rustdocflags) = rustdocflags {
@@ -1441,11 +1451,6 @@ fn resolve_excluded_paths(cx: &Context) -> Vec<Utf8PathBuf> {
 
 fn target_u_lower(target: &str) -> String {
     target.replace(['-', '.'], "_")
-}
-fn target_u_upper(target: &str) -> String {
-    let mut target = target_u_lower(target);
-    target.make_ascii_uppercase();
-    target
 }
 
 /// Make the path relative if it's a descendent of the current working dir, otherwise just return
