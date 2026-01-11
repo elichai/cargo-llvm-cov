@@ -51,7 +51,25 @@ fn try_run_wrapper() -> Result<ExitCode> {
     let mut coverage_flags = Vec::new();
 
     // Check if we should add instrumentation for this invocation
-    if should_instrument()? {
+    let should_instrument = should_instrument()?;
+    
+    // Debug logging if CARGO_LLVM_COV_WRAPPER_DEBUG is set
+    if env::var_os("CARGO_LLVM_COV_WRAPPER_DEBUG").is_some() {
+        if let (Some(crate_name), Some(pkg_name)) = (
+            env::var_os("CARGO_CRATE_NAME"),
+            env::var_os("CARGO_PKG_NAME"),
+        ) {
+            eprintln!(
+                "cargo-llvm-cov wrapper: crate={}, pkg={}, primary={}, instrument={}",
+                crate_name.to_string_lossy(),
+                pkg_name.to_string_lossy(),
+                env::var_os("CARGO_PRIMARY_PACKAGE").is_some(),
+                should_instrument
+            );
+        }
+    }
+    
+    if should_instrument {
         add_coverage_flags(&mut coverage_flags)?;
     }
 
@@ -95,6 +113,18 @@ fn should_instrument() -> Result<bool> {
         }
     }
 
+    // When using RUSTC_WORKSPACE_WRAPPER, Cargo automatically only calls us
+    // for workspace members, not dependencies. When using RUSTC_WRAPPER (with
+    // --dep-coverage), we need to check CARGO_PRIMARY_PACKAGE.
+    //
+    // If CARGO_LLVM_COV_DEP_COVERAGE is set, we're using RUSTC_WRAPPER and
+    // should instrument everything.
+    if env::var_os("CARGO_LLVM_COV_DEP_COVERAGE").is_some() {
+        return Ok(true);
+    }
+
+    // Otherwise, when using RUSTC_WORKSPACE_WRAPPER, instrument everything
+    // (Cargo already filtered for workspace members)
     Ok(true)
 }
 

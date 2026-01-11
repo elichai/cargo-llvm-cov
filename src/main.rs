@@ -294,9 +294,17 @@ fn set_env(cx: &Context, env: &mut dyn EnvTarget, IsNextest(is_nextest): IsNexte
     // Build coverage flags that will be used by the rustc wrapper
     let coverage_flags = build_coverage_flags(cx);
     
-    // Use RUSTC_WRAPPER instead of setting RUSTFLAGS directly
-    // This provides better interaction with user-configured RUSTFLAGS
-    env.set("RUSTC_WRAPPER", cx.current_exe.to_str().unwrap())?;
+    // Use RUSTC_WORKSPACE_WRAPPER for workspace members only (more optimal)
+    // This is only set for workspace members, not dependencies
+    // Use RUSTC_WRAPPER only if --dep-coverage is specified to also instrument dependencies
+    if cx.args.cov.dep_coverage.is_some() {
+        // Instrument all crates including dependencies
+        env.set("RUSTC_WRAPPER", cx.current_exe.to_str().unwrap())?;
+    } else {
+        // Only instrument workspace members (default, more optimal)
+        env.set("RUSTC_WORKSPACE_WRAPPER", cx.current_exe.to_str().unwrap())?;
+    }
+    
     env.set("CARGO_LLVM_COV_RUSTC_WRAPPER", "1")?;
     
     // Set flags for the wrapper to use
@@ -307,6 +315,11 @@ fn set_env(cx: &Context, env: &mut dyn EnvTarget, IsNextest(is_nextest): IsNexte
         if let Some(coverage_target) = &cx.args.target {
             env.set("CARGO_LLVM_COV_TARGET_ONLY", coverage_target)?;
         }
+    }
+    
+    // Pass dep_coverage setting to the wrapper
+    if cx.args.cov.dep_coverage.is_some() {
+        env.set("CARGO_LLVM_COV_DEP_COVERAGE", "1")?;
     }
 
     // https://doc.rust-lang.org/nightly/rustc/instrument-coverage.html#including-doc-tests
