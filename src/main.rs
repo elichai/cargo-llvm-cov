@@ -192,7 +192,7 @@ struct IsNextest(bool);
 fn set_env(cx: &Context, env: &mut dyn EnvTarget, IsNextest(is_nextest): IsNextest) -> Result<()> {
     fn build_coverage_flags(cx: &Context) -> Flags {
         let mut flags = Flags::default();
-        
+
         if cx.ws.stable_coverage {
             flags.push("-C");
             // TODO: if user already set -C instrument-coverage=..., respect it
@@ -238,7 +238,7 @@ fn set_env(cx: &Context, env: &mut dyn EnvTarget, IsNextest(is_nextest): IsNexte
         if cx.ws.rustc_version.nightly && !cx.args.cov.no_cfg_coverage_nightly {
             flags.push("--cfg=coverage_nightly");
         }
-        
+
         if cx.args.remap_path_prefix {
             flags.push("--remap-path-prefix");
             flags.push(format!("{}/=", cx.ws.metadata.workspace_root));
@@ -249,7 +249,7 @@ fn set_env(cx: &Context, env: &mut dyn EnvTarget, IsNextest(is_nextest): IsNexte
             // https://github.com/dtolnay/trybuild/pull/123
             flags.push("--cfg=trybuild_no_target");
         }
-        
+
         flags
     }
 
@@ -293,7 +293,7 @@ fn set_env(cx: &Context, env: &mut dyn EnvTarget, IsNextest(is_nextest): IsNexte
 
     // Build coverage flags that will be used by the rustc wrapper
     let coverage_flags = build_coverage_flags(cx);
-    
+
     // Use RUSTC_WORKSPACE_WRAPPER for workspace members only (more optimal)
     // This is only set for workspace members, not dependencies
     // Use RUSTC_WRAPPER only if --dep-coverage is specified to also instrument dependencies
@@ -304,19 +304,19 @@ fn set_env(cx: &Context, env: &mut dyn EnvTarget, IsNextest(is_nextest): IsNexte
         // Only instrument workspace members (default, more optimal)
         env.set("RUSTC_WORKSPACE_WRAPPER", cx.current_exe.to_str().unwrap())?;
     }
-    
+
     env.set("CARGO_LLVM_COV_RUSTC_WRAPPER", "1")?;
-    
+
     // Set flags for the wrapper to use
     env.set("CARGO_LLVM_COV_FLAGS", &coverage_flags.encode_space_separated()?)?;
-    
+
     // For coverage_target_only mode, pass the target info to the wrapper
     if cx.args.coverage_target_only {
         if let Some(coverage_target) = &cx.args.target {
             env.set("CARGO_LLVM_COV_TARGET_ONLY", coverage_target)?;
         }
     }
-    
+
     // Pass dep_coverage setting to the wrapper
     if cx.args.cov.dep_coverage.is_some() {
         env.set("CARGO_LLVM_COV_DEP_COVERAGE", "1")?;

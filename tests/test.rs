@@ -309,7 +309,7 @@ fn show_env() {
     cargo_llvm_cov("show-env").assert_success().stdout_not_contains("export");
     cargo_llvm_cov("show-env").arg("--export-prefix").assert_success().stdout_contains("export");
 
-    // With the new RUSTC_WORKSPACE_WRAPPER approach, we set RUSTC_WORKSPACE_WRAPPER 
+    // With the new RUSTC_WORKSPACE_WRAPPER approach, we set RUSTC_WORKSPACE_WRAPPER
     // and CARGO_LLVM_COV_FLAGS instead of RUSTFLAGS
     // This only instruments workspace members, not dependencies (more optimal)
     cargo_llvm_cov("show-env")
@@ -319,7 +319,7 @@ fn show_env() {
         .stdout_contains("$env:RUSTC_WORKSPACE_WRAPPER=")
         .stdout_contains("$env:CARGO_LLVM_COV_RUSTC_WRAPPER=")
         .stdout_contains("$env:CARGO_LLVM_COV_FLAGS=");
-    
+
     cargo_llvm_cov("show-env")
         .arg("--export-prefix")
         .arg("--with-pwsh-env-prefix")

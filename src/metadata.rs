@@ -96,15 +96,18 @@ impl Package {
         let map = value.as_object_mut().ok_or("packages")?;
 
         let id = map.remove_string("id")?;
-        Ok((id, Self {
-            name: map.remove_string("name")?,
-            targets: map
-                .remove_array("targets")?
-                .into_iter()
-                .map(Target::from_value)
-                .collect::<Result<_, _>>()?,
-            manifest_path: map.remove_string("manifest_path")?,
-        }))
+        Ok((
+            id,
+            Self {
+                name: map.remove_string("name")?,
+                targets: map
+                    .remove_array("targets")?
+                    .into_iter()
+                    .map(Target::from_value)
+                    .collect::<Result<_, _>>()?,
+                manifest_path: map.remove_string("manifest_path")?,
+            },
+        ))
     }
 }
 
