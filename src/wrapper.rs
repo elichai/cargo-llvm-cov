@@ -8,12 +8,13 @@
 //! over which crates get instrumented.
 
 use std::{
-    env,
     ffi::OsString,
     process::{Command, ExitCode},
 };
 
 use anyhow::{Context as _, Result};
+
+use crate::env;
 
 /// Run as a rustc wrapper
 ///
@@ -74,8 +75,11 @@ fn try_run_wrapper() -> Result<ExitCode> {
         .with_context(|| format!("failed to execute rustc: {}", rustc.to_string_lossy()))?;
 
     // Preserve the exact exit code from rustc
-    let exit_code = status.code().unwrap_or(1);
-    Ok(ExitCode::from(exit_code as u8))
+    // On Unix systems, exit codes are typically in the range 0-127, but can be up to 255.
+    // We truncate to u8 to match ExitCode::from's signature.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let exit_code = status.code().unwrap_or(1) as u8;
+    Ok(ExitCode::from(exit_code))
 }
 
 /// Determine if we should instrument this rustc invocation
@@ -123,7 +127,7 @@ fn add_coverage_flags(args: &mut Vec<OsString>) -> Result<()> {
 
     let mut flags: Vec<OsString> = cov_flags_str.split_whitespace().map(OsString::from).collect();
     // Prepend coverage flags to the beginning
-    flags.extend(args.drain(..));
+    flags.append(args);
     *args = flags;
 
     Ok(())
@@ -137,16 +141,35 @@ mod tests {
     // Use `cargo test -- --test-threads=1` or use the `serial_test` crate if needed.
 
     #[test]
+    #[allow(unsafe_code)] // Test needs to modify environment variables
     fn test_should_instrument_no_env() {
-        env::remove_var("CARGO_LLVM_COV");
+        // SAFETY: This test runs in isolation (single-threaded test execution recommended).
+        // Environment variable access is safe because:
+        // 1. No C libraries are being called that might access this environment variable
+        // 2. This is a test-only function that runs near the start of the test
+        // 3. The variable is only used within this crate for testing purposes
+        unsafe {
+            std::env::remove_var("CARGO_LLVM_COV");
+        }
         assert!(!should_instrument());
     }
 
     #[test]
+    #[allow(unsafe_code)] // Test needs to modify environment variables
     fn test_should_instrument_with_env() {
-        env::set_var("CARGO_LLVM_COV", "1");
-        env::remove_var("CARGO_LLVM_COV_TARGET_ONLY");
+        // SAFETY: This test runs in isolation (single-threaded test execution recommended).
+        // Environment variable access is safe because:
+        // 1. No C libraries are being called that might access this environment variable
+        // 2. This is a test-only function that runs near the start of the test
+        // 3. The variable is only used within this crate for testing purposes
+        unsafe {
+            std::env::set_var("CARGO_LLVM_COV", "1");
+            std::env::remove_var("CARGO_LLVM_COV_TARGET_ONLY");
+        }
         assert!(should_instrument());
-        env::remove_var("CARGO_LLVM_COV");
+        // SAFETY: See above safety comment
+        unsafe {
+            std::env::remove_var("CARGO_LLVM_COV");
+        }
     }
 }
