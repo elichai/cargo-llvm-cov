@@ -24,7 +24,7 @@ use anyhow::{Context as _, Result};
 /// 4. Calls the real rustc with the modified arguments
 pub(crate) fn run_wrapper() -> ExitCode {
     match try_run_wrapper() {
-        Ok(code) => code,
+        Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("cargo-llvm-cov wrapper error: {e:#}");
             ExitCode::FAILURE
@@ -32,7 +32,7 @@ pub(crate) fn run_wrapper() -> ExitCode {
     }
 }
 
-fn try_run_wrapper() -> Result<ExitCode> {
+fn try_run_wrapper() -> Result<()> {
     let mut args = env::args_os();
 
     // First arg is our binary name, skip it
@@ -42,7 +42,7 @@ fn try_run_wrapper() -> Result<ExitCode> {
     let rustc = args.next().context("rustc wrapper called without rustc path")?;
 
     // Remaining args are rustc arguments
-    let rustc_args: Vec<OsString> = args.collect();
+    let mut rustc_args: Vec<OsString> = args.collect();
 
     // Check if we should add instrumentation for this invocation
     let should_instrument = should_instrument();
@@ -62,23 +62,22 @@ fn try_run_wrapper() -> Result<ExitCode> {
         }
     }
 
-    // Build the final argument list: coverage flags + original args
-    let final_args = if should_instrument {
-        let mut coverage_flags = Vec::new();
-        add_coverage_flags(&mut coverage_flags)?;
-        coverage_flags.extend(rustc_args);
-        coverage_flags
-    } else {
-        rustc_args
-    };
+    // Add coverage flags if we should instrument
+    if should_instrument {
+        add_coverage_flags(&mut rustc_args)?;
+    }
 
     // Execute rustc
     let status = Command::new(&rustc)
-        .args(&final_args)
+        .args(&rustc_args)
         .status()
         .with_context(|| format!("failed to execute rustc: {}", rustc.to_string_lossy()))?;
 
-    Ok(if status.success() { ExitCode::SUCCESS } else { ExitCode::FAILURE })
+    if !status.success() {
+        anyhow::bail!("rustc exited with status: {}", status);
+    }
+
+    Ok(())
 }
 
 /// Determine if we should instrument this rustc invocation
@@ -115,16 +114,39 @@ fn should_instrument() -> bool {
 }
 
 /// Add coverage instrumentation flags to the argument list
-fn add_coverage_flags(flags: &mut Vec<OsString>) -> Result<()> {
+fn add_coverage_flags(args: &mut Vec<OsString>) -> Result<()> {
     let Some(cov_flags) = env::var_os("CARGO_LLVM_COV_FLAGS") else {
         return Ok(());
     };
 
-    // Parse space-separated flags
-    let cov_flags_str =
-        cov_flags.to_str().context("CARGO_LLVM_COV_FLAGS contains invalid UTF-8")?;
+    // Parse space-separated flags using byte splitting for better portability
+    // This works because space (0x20) is the same in UTF-8 and all ASCII-compatible encodings
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        let bytes = cov_flags.as_encoded_bytes();
+        let mut flags = Vec::new();
+        for chunk in bytes.split(|&b| b == b' ') {
+            if !chunk.is_empty() {
+                flags.push(OsString::from(std::ffi::OsStr::from_bytes(chunk)));
+            }
+        }
+        // Prepend coverage flags to the beginning
+        flags.extend(args.drain(..));
+        *args = flags;
+    }
 
-    flags.extend(cov_flags_str.split_whitespace().map(OsString::from));
+    #[cfg(not(unix))]
+    {
+        // On non-Unix platforms, fall back to UTF-8 string splitting
+        let cov_flags_str =
+            cov_flags.to_str().context("CARGO_LLVM_COV_FLAGS contains invalid UTF-8")?;
+        let mut flags: Vec<OsString> =
+            cov_flags_str.split_whitespace().map(OsString::from).collect();
+        // Prepend coverage flags to the beginning
+        flags.extend(args.drain(..));
+        *args = flags;
+    }
 
     Ok(())
 }
@@ -132,6 +154,9 @@ fn add_coverage_flags(flags: &mut Vec<OsString>) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Note: These tests modify environment variables and should not run in parallel.
+    // Use `cargo test -- --test-threads=1` or use the `serial_test` crate if needed.
 
     #[test]
     fn test_should_instrument_no_env() {
