@@ -24,7 +24,7 @@ use anyhow::{Context as _, Result};
 /// 4. Calls the real rustc with the modified arguments
 pub(crate) fn run_wrapper() -> ExitCode {
     match try_run_wrapper() {
-        Ok(()) => ExitCode::SUCCESS,
+        Ok(code) => code,
         Err(e) => {
             eprintln!("cargo-llvm-cov wrapper error: {e:#}");
             ExitCode::FAILURE
@@ -32,7 +32,7 @@ pub(crate) fn run_wrapper() -> ExitCode {
     }
 }
 
-fn try_run_wrapper() -> Result<()> {
+fn try_run_wrapper() -> Result<ExitCode> {
     let mut args = env::args_os();
 
     // First arg is our binary name, skip it
@@ -73,11 +73,7 @@ fn try_run_wrapper() -> Result<()> {
         .status()
         .with_context(|| format!("failed to execute rustc: {}", rustc.to_string_lossy()))?;
 
-    if !status.success() {
-        anyhow::bail!("rustc exited with status: {}", status);
-    }
-
-    Ok(())
+    Ok(if status.success() { ExitCode::SUCCESS } else { ExitCode::FAILURE })
 }
 
 /// Determine if we should instrument this rustc invocation
@@ -119,34 +115,14 @@ fn add_coverage_flags(args: &mut Vec<OsString>) -> Result<()> {
         return Ok(());
     };
 
-    // Parse space-separated flags using byte splitting for better portability
-    // This works because space (0x20) is the same in UTF-8 and all ASCII-compatible encodings
-    #[cfg(unix)]
-    {
-        use std::os::unix::ffi::OsStrExt;
-        let bytes = cov_flags.as_encoded_bytes();
-        let mut flags = Vec::new();
-        for chunk in bytes.split(|&b| b == b' ') {
-            if !chunk.is_empty() {
-                flags.push(OsString::from(std::ffi::OsStr::from_bytes(chunk)));
-            }
-        }
-        // Prepend coverage flags to the beginning
-        flags.extend(args.drain(..));
-        *args = flags;
-    }
+    // Parse space-separated flags
+    let cov_flags_str =
+        cov_flags.to_str().context("CARGO_LLVM_COV_FLAGS contains invalid UTF-8")?;
 
-    #[cfg(not(unix))]
-    {
-        // On non-Unix platforms, fall back to UTF-8 string splitting
-        let cov_flags_str =
-            cov_flags.to_str().context("CARGO_LLVM_COV_FLAGS contains invalid UTF-8")?;
-        let mut flags: Vec<OsString> =
-            cov_flags_str.split_whitespace().map(OsString::from).collect();
-        // Prepend coverage flags to the beginning
-        flags.extend(args.drain(..));
-        *args = flags;
-    }
+    let mut flags: Vec<OsString> = cov_flags_str.split_whitespace().map(OsString::from).collect();
+    // Prepend coverage flags to the beginning
+    flags.extend(args.drain(..));
+    *args = flags;
 
     Ok(())
 }
