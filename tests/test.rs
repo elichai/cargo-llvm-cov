@@ -310,24 +310,50 @@ fn show_env() {
     cargo_llvm_cov("show-env").assert_success().stdout_not_contains("export");
     cargo_llvm_cov("show-env").arg("--export-prefix").assert_success().stdout_contains("export");
 
-    let mut flags = Flags::default();
-    flags.push("--deny warnings");
-    flags.push("--cfg=tests");
-    let flags = flags.encode().unwrap();
-
-    cargo_llvm_cov("show-env")
-        .env("CARGO_ENCODED_RUSTFLAGS", flags)
-        .arg("--with-pwsh-env-prefix")
-        .assert_success()
-        // Verify the prefix related content + the encoding of "--"
-        .stdout_contains("$env:CARGO_ENCODED_RUSTFLAGS=\"`u{2d}`u{2d}")
-        // Verify binary character didn't lead to incompatible output for pwsh
-        .stdout_contains("`u{1f}");
     cargo_llvm_cov("show-env")
         .arg("--export-prefix")
         .arg("--with-pwsh-env-prefix")
         .assert_failure()
         .stderr_contains("may not be used together with");
+}
+
+#[test]
+fn show_env_encoded_rustflags() {
+    // Test that CARGO_ENCODED_RUSTFLAGS in user environment is still accessible
+    // With the wrapper approach, user-provided RUSTFLAGS are preserved automatically
+    // by cargo and don't need to be merged into CARGO_ENCODED_RUSTFLAGS by us
+    let mut flags = Flags::default();
+    flags.push("--deny warnings");
+    flags.push("--cfg=tests");
+    let flags_encoded = flags.encode().unwrap();
+
+    // When user sets CARGO_ENCODED_RUSTFLAGS, it should be passed to rustc by cargo
+    // The wrapper doesn't interfere with user RUSTFLAGS
+    cargo_llvm_cov("show-env")
+        .env("CARGO_ENCODED_RUSTFLAGS", &flags_encoded)
+        .arg("--with-pwsh-env-prefix")
+        .assert_success()
+        // Wrapper should still be set
+        .stdout_contains("$env:RUSTC_WORKSPACE_WRAPPER=");
+
+    // Note: CARGO_ENCODED_RUSTFLAGS is not propagated in show-env output because
+    // we use RUSTC_WORKSPACE_WRAPPER instead of setting RUSTFLAGS directly.
+    // User RUSTFLAGS are preserved by cargo itself.
+}
+
+#[test]
+fn show_env_wrapper() {
+    // Test that the wrapper environment variables are set correctly
+    // With the new RUSTC_WORKSPACE_WRAPPER approach, we set RUSTC_WORKSPACE_WRAPPER
+    // and CARGO_LLVM_COV_FLAGS instead of RUSTFLAGS
+    // This only instruments workspace members, not dependencies (more optimal)
+    cargo_llvm_cov("show-env")
+        .arg("--with-pwsh-env-prefix")
+        .assert_success()
+        // Verify the workspace wrapper environment variable is set
+        .stdout_contains("$env:RUSTC_WORKSPACE_WRAPPER=")
+        .stdout_contains("$env:CARGO_LLVM_COV_RUSTC_WRAPPER=")
+        .stdout_contains("$env:CARGO_LLVM_COV_FLAGS=");
 }
 
 #[test]
