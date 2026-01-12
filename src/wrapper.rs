@@ -73,7 +73,9 @@ fn try_run_wrapper() -> Result<ExitCode> {
         .status()
         .with_context(|| format!("failed to execute rustc: {}", rustc.to_string_lossy()))?;
 
-    Ok(if status.success() { ExitCode::SUCCESS } else { ExitCode::FAILURE })
+    // Preserve the exact exit code from rustc
+    let exit_code = status.code().unwrap_or(1);
+    Ok(ExitCode::from(exit_code as u8))
 }
 
 /// Determine if we should instrument this rustc invocation
